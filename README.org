@@ -1,0 +1,33 @@
+#+title: README
+#+date: <2025-04-08 Tue>
+#+author: C Wulfman
+#+email: cwulfman@princeton.edu
+
+
+This repository contains data harvested from Google's GRIN interface with Harvard's grin-to-s3 tools, plus additional scripts and data of our own.
+
+We have been given access to Harvard's instadin repo, in which can be found grin-to-s3, a suite of scripts Harvard uses to archive its Google Books to an S3 bucket.  We are using (some of) these tools to engage in a similar project.
+
+Contact (?) at Harvard to get permission to clone the instadin repo, then follow the instructions in the README.
+
+all_books.tsv is the entire set of Princeton books retrieved via this call:
+
+#+begin_src sh
+  python grin.py --directory=PRNC --resource="_all_books?format=text&mode=all" > _all_books.tsv
+#+end_src
+
+
+The Harvard authors suggest getting a dump of our MARC records from Stanford's POD, to enhance the metadata in the Google archives.  We downloaded the dump with Python's resync library (get it from PyPi):
+
+#+begin_src sh
+  resync-sync -v --sitemap https://pod.stanford.edu/organizations/normalized_resourcelist/marcxml --access-token $ACCESS_TOKEN -b https://pod.stanford.edu/ pod
+#+end_src
+
+The resulting
+
+#+begin_src sh
+  python process_pod_xml.py --directory=PRNC --filename ~/gh/pulibrary/Google_Books/full-marcxml.xml --output_dir ~/gh/pulibrary/Google_Books/grin_processed
+#+end_src
+
+
+The directory produced by process_pod_xml.py is flat and is therefore extremely difficult to explore; I wrote a script that turns it into a pairtree.
