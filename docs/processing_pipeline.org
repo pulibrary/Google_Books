@@ -1,11 +1,27 @@
-* General Considerations
-** Scale
+#+title: Designing a Pipeline for Copying Books from GRIN
+#+date: <2025-04-17 Thu>
+#+author: Cliff Wulfman
+#+email: cwulfman@princeton.edu
+
+* Designing a Pipeline for Copying Books from GRIN
+PUL wants to copy all of its books digitized during the Google Books project to a server under its control.  This document proposes a method for accomplishing this goal.
+
+
+** General Considerations
+*** Scale
 GRIN says PUL has 277,970 books Google Books. Harvard says the default conversion rate (how many books GRIN can process into downloadable tarballs) is about 5,000 per day. Assuming we can download tarballs as fast as GRIN can put them up, that means a minimum of 56 days to process everything.
 
 The size of the _converted pool at Google Books is also 5,000: once the pool size reaches 5000, older packages are replaced with new ones in the pool. 
 
+*** Existing Resources
+Google has written a [[https://docs.google.com/document/d/1ugKUSkq4jAwmyWu3HubUIobQA1ag4VgRP1JjLeGUW20/edit?usp=sharing][GRIN Overview]] that describes the Google Return INterface (GRIN) and sample Python code that uses OAuth2 to access the GRIN API.  Harvard's =grin-to-s3= package (below)  builds on this script.
 
-* Harvard's Pipeline
+
+**** grin-to-s3
+The Institutional Data Initiative at Harvard has developed a set of Python scripts called =grin-to-s3= that they use to migrate their books.  Some of its features are local to Harvard or not relevant to us, but it provides a model, some modules, and some guidance that are useful to us.
+
+The suite includes scripts for hitting the GRIN API; matching GRIN barcodes to MARC records; moving an entire corpus from GRIN to s3 and doing things with the retrieved archives; and tools for generating data sets for machine learning tasks.
+
 Harvard implements a pipeline in a script called =liberate.py=. 
 
 It assumes you have already:
@@ -26,15 +42,30 @@ Processing does a few things:
 6. As data is collected and put into S3, a `.retrieval` sister file containing a timestamp is uploaded.
 #+end_quote
 
-* Another Approach
-Rather than have a single, long-running process to do all the work, a more asynchronous approach would almost certainly be superior. One process manages the _all_books list: what books have been copied over to our bucket, what books should be queued up next, based on the state of the _converted pool.
+Harvard's =liberate= script can serve as a model for our implementation, but it cannot be used out-of-the box, for several reasons:
 
-Another process monitors the queue of books to be processed
+- it includes functionality we don't want;
+- it bundles functionality into a single script: the pipeline is contained within the script, making the pipeline single-threaded, resulting in a slower, more fragile process.
 
 
-** Tell Google to make a barcode ready for download
-Use Harvard's grin.py script to do this:
+* Design 1: An Asynchronous Pipeline
+Harvard's =liberate= script can serve as a model for our implementation.  It cannot be used out-of-the box, for several reasons:
 
-#+begin_src sh
-  $ python grin.py --directory=PRNC --method=POST --resource="_process?barcodes=123&barcodes=456&barcodes=789"
-#+end_src
+- it includes functionality we don't want;
+- it bundles functionality into a single script: the pipeline is contained within the script, making the pipeline single-threaded, resulting in a slower, more fragile process.
+
+
+A better approach might be to implement the pipeline as a collection of asynchronous processes or microservices that either communicate via a messaging queue (like RabbitMQ) or through polling. Such a pipeline would be more robust (if one process fails the entire pipeline doesn't stop); faster (multiple processes running at the same time); and easier to maintain (proper separation of concerns).  Mosts importantly, it would be configurable and extensible: an OCR process, for example, could be inserted into the pipeline without modifying anything
+
+
+The components of the pipeline move tokens and assets through chains of buckets.  One chain contains the books/tarballs
+
+- Bucket#1 :: contains barcode tokens.  These might be the MARC records extracted from the Stanford POD; they might be files that processes use to record timestamps or other information. In one scenario, there is a *staging process* that selects items from the set of Princeton Google Books based on some criteria. A second process periodically checks this bucket: if there are tokens in it, the process iterates over them and tells GRIN to stage each one (if it is not already in the pool)
+
+- A *downloader process* that monitors bucket#1 for tokens. If there are tokens, it iterates over each one in bucket#1. For each token, it downloads encrypted tarball from GRIN, decrypts it, and puts the decrypted tarball into bucket#2, along with the token.  When there are no more tokens, it notifies the stager.
+
+- An *uploader process* monitors bucket#2.  If there are tarballs in the bucket, the process uploads each one to the cloud store; it verifies that the tarball has been successfully uploaded and then it deletes the tarball.  It moves the tarball's token to bucket#3. When there are no more tarballs, it notifies the downloader.
+
+
+I suspect the most flexible way to implement inter-process communication is through a message broker like RabbitMQ.
+
