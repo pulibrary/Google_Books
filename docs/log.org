@@ -1,0 +1,99 @@
+#+options: ':nil *:t -:t ::t <:t H:3 \n:nil ^:t arch:headline
+#+options: author:t broken-links:nil c:nil creator:nil
+#+options: d:(not "LOGBOOK") date:t e:t email:nil expand-links:t f:t
+#+options: inline:t num:t p:nil pri:nil prop:nil stat:t tags:t
+#+options: tasks:t tex:t timestamp:t title:t toc:t todo:t |:t
+#+title: log
+#+date: <2025-02-25 Tue>
+#+author: WulfmanC
+#+email: wulfmanc@LIB-Y0PK60MQWH
+#+language: en
+#+select_tags: export
+#+exclude_tags: noexport
+#+creator: Emacs 31.0.50 (Org mode 9.7.11)
+#+cite_export:
+
+
+
+* Log
+:LOGBOOK:
+CLOCK: [2025-02-25 Tue 16:16]--[2025-02-25 Tue 17:40] =>  1:24
+:END:
+
+** [2025-02-25 Tue]
+Following instructions in instadin, getting resources from [[https://pod.stanford.edu/][Stanford's POD Aggregator]]. Had to get invitation from EC to access.
+
+Then followed instructions at the [[https://github.com/pod4lib/aggregator/wiki][POD wiki]] to [[https://github.com/pod4lib/aggregator/wiki/Harvesting-using-ResourceSync][harvest data using ResourceSync]].
+
+https://pod.stanford.edu/organizations/princeton/streams/princeton-prod-0223/normalized_resourcelist/marcxml
+
+
+#+begin_src sh
+  resync-sync -v --sitemap https://pod.stanford.edu/organizations/normalized_resourcelist/marcxml --access-token $ACCESS_TOKEN -b https://pod.stanford.edu/ pod
+#+end_src
+
+This downloads A LOT OF DATA.  It appears, after discussion with John
+Hess, that the only file needed is Princeton's full dump file,
+_princeton-2023-02-10-full-marcxml.xml_. This file itself, of course,
+is huge: 27G of MARC records in a single marc:collection element.  I
+wrote a little script to split that file into individual MARC files;
+there are so many that I'm using a PairTree structure to manage all of them.
+
+
+** [2025-02-27 Thu]
+process_pod_xml.py does the work for me, actually. It take the
+_all_files.tsv file downloaded from Google in an earlier step, matches
+the barcodes with data in the dump, and generates augmented MARC records.
+
+
+#+begin_src sh
+  python process_pod_xml.py --directory=PRNC --filename ~/gh/pulibrary/Google_Books/full-marcxml.xml --output_dir ~/gh/pulibrary/Google_Books/grin_processed
+#+end_src
+
+#+begin_quote
+grin-to-s3 git:(main) ✗ python process_pod_xml.py --directory=PRNC --filename ~/gh/pulibrary/Google_Books/full-marcxml.xml --output_dir ~/gh/pulibrary/Google_Books/grin_processed
+getting all barcodes from GRIN...
+> /Users/wulfmanc/repos/gh/instdin/grin-to-s3/src/grin.py(64)make_grin_request()
+-> request = urllib.request.Request(url, method=method)
+(Pdb) cont
+got 277970 GRIN barcodes
+getting all barcodes from pod xml...
+  iterating through dom
+  processed 6127000 records, wrote 271577 to diskprocessed xml.
+got 8056948 pod barcodes from 6127470 records
+found 271577 matches 97.7001115228262%
+found 0 barcodes that match more than one pod record
+#+end_quote
+
+** [2025-03-02 Sun]
+Over the weekend, I loaded all those records into eXist-db (it took
+about 24 hours).  I created a collection.xconf file to create indexes.
+I also increased some memory parameter values.  Performance isn't
+great: it takes about 1 second to do a lookup by record id.
+** [2025-03-07 Fri]
+Exploring the process of retrieving items from GB via GRIN.
+
+Instadin says
+#+begin_quote
+You can convert (make ready for download) specific barcodes using
+
+```
+$ python grin.py --directory=Harvard --method=POST --resource="_process?barcodes=123&barcodes=456&barcodes=789"
+```
+
+Then scan the `_in_process` `_converted`, `_failed` resources to watch for their completion.
+
+For more information, see `python grin.py --help`
+
+#+end_quote
+
+I'll try one from our directory:
+
+#+begin_src sh
+  python grin.py --directory=PRNC --method=POST --resource="_process?barcodes=32101083064988
+#+end_src
+
+This seems to work; this barcode gets added to the queue.
+
+I also downloaded another already-processed file,
+`PRNC_32101081977728.tar.gz.gpg`; unfortunately, I don't know the GPG key to decrypt it.

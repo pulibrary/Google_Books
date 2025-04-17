@@ -1,0 +1,15 @@
+Before you can do useful work with the GRIN data, you should create some local data files.  Querying GRIN requires that you have credentials and work with OAUTH, which we'd like to avoid for now.  And getting the MARC records from the Stanford POD is very time-consuming.
+
+- Get latest dump from Stanford POD
+  The easiest way to do this is via a web browser; go to the Princeton stream and grab the latest full dump from the normalized data page: https://pod.stanford.edu/organizations/princeton/streams/princeton-prod-0223/normalized_data
+
+  The latest full dump was generated in 2023 (https://pod.stanford.edu/file/164735/princeton-2023-02-10-full-marcxml.xml.gz).
+
+  When uncompressed, this is a 27 gigabyte MARC collection.  Harvard's =process_pod_xml.py= script uses that full dump to match the barcodes from GRIN with MARC records and write them out individually (to a directory called pod_xml).
+
+
+  #+begin_src sh
+    python process_pod_xml.py --directory=PRNC --filename ~/gh/pulibrary/Google_Books/full-marcxml.xml --output_dir ~/gh/pulibrary/Google_Books/grin_processed
+  #+end_src
+
+  The pod_xml directory contains 271,578 files, which makes it difficult to browse during development; I've found it easiest to parse this file into individual records and store them in a pairtree (pod_tree).
