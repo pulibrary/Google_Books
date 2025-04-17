@@ -3,21 +3,20 @@
 #+author: Cliff Wulfman
 #+email: cwulfman@princeton.edu
 
-* Designing a Pipeline for Copying Books from GRIN
 PUL wants to copy all of its books digitized during the Google Books project to a server under its control.  This document proposes a method for accomplishing this goal.
 
 
-** General Considerations
-*** Scale
+* General Considerations
+** Scale
 GRIN says PUL has 277,970 books Google Books. Harvard says the default conversion rate (how many books GRIN can process into downloadable tarballs) is about 5,000 per day. Assuming we can download tarballs as fast as GRIN can put them up, that means a minimum of 56 days to process everything.
 
 The size of the _converted pool at Google Books is also 5,000: once the pool size reaches 5000, older packages are replaced with new ones in the pool. 
 
-*** Existing Resources
+* Existing Resources
 Google has written a [[https://docs.google.com/document/d/1ugKUSkq4jAwmyWu3HubUIobQA1ag4VgRP1JjLeGUW20/edit?usp=sharing][GRIN Overview]] that describes the Google Return INterface (GRIN) and sample Python code that uses OAuth2 to access the GRIN API.  Harvard's =grin-to-s3= package (below)  builds on this script.
 
 
-**** grin-to-s3
+** grin-to-s3
 The Institutional Data Initiative at Harvard has developed a set of Python scripts called =grin-to-s3= that they use to migrate their books.  Some of its features are local to Harvard or not relevant to us, but it provides a model, some modules, and some guidance that are useful to us.
 
 The suite includes scripts for hitting the GRIN API; matching GRIN barcodes to MARC records; moving an entire corpus from GRIN to s3 and doing things with the retrieved archives; and tools for generating data sets for machine learning tasks.
@@ -49,11 +48,6 @@ Harvard's =liberate= script can serve as a model for our implementation, but it 
 
 
 * Design 1: An Asynchronous Pipeline
-Harvard's =liberate= script can serve as a model for our implementation.  It cannot be used out-of-the box, for several reasons:
-
-- it includes functionality we don't want;
-- it bundles functionality into a single script: the pipeline is contained within the script, making the pipeline single-threaded, resulting in a slower, more fragile process.
-
 
 A better approach might be to implement the pipeline as a collection of asynchronous processes or microservices that either communicate via a messaging queue (like RabbitMQ) or through polling. Such a pipeline would be more robust (if one process fails the entire pipeline doesn't stop); faster (multiple processes running at the same time); and easier to maintain (proper separation of concerns).  Mosts importantly, it would be configurable and extensible: an OCR process, for example, could be inserted into the pipeline without modifying anything
 
