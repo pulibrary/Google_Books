@@ -47,39 +47,66 @@ Harvard's =liberate= script can serve as a model for our implementation, but it 
 - it bundles functionality into a single script: the pipeline is contained within the script, making the pipeline single-threaded, resulting in a slower, more fragile process.
 
 
-* Design 1: An Asynchronous Pipeline
+* Design 1: An Asynchronous Kanban-Style Pipeline
 
 A better approach might be to implement the pipeline as a collection of asynchronous processes or microservices that either communicate via a messaging queue (like RabbitMQ) or through polling. Such a pipeline would be more robust (if one process fails the entire pipeline doesn't stop); faster (multiple processes running at the same time); and easier to maintain (proper separation of concerns).  Mosts importantly, it would be configurable and extensible: an OCR process, for example, could be inserted into the pipeline without modifying anything.
 
-The processes in the pipeline must communicate with one another.  Two possible ways:
+The message-broker method is more complex, perhaps overly so for this application; for now, we will consider the polling model.
 
-- passing tokens through a series of buckets (directories), Kanban style
-- using a message broker like RabbitMQ
+In this model, the pipeline is a sequence of directories containing tokens, like a Kanban board, that serve as buckets.  Processes are configured to monitor the state of an "input bucket": when a token appears there, a process performs its actions and then moves the token to an "output bucket," which serves as the input bucket for another process.
 
-We should consider both.
+Tokens are files containing state information. Processes move tokens into an process-specific working directory while they perform their tasks; when they are done, they move the token to the next bucket in the queue, after, perhaps, update the token with new information.
 
-There are at least three processor classes: a staging process; a downloading process, and an uploading process. A fourth process, a monitor, could be used gather performance stats.
+The prototypical pipline is a sequence of linked processes (filters), where the output of one filter is the input to another filter:
 
-** Staging Process
-This process selects Google Book resources to work on, according to some criteria. One strategy might be to feed it a list of barcodes (slices of the _all_books.tsv file, for example).  This process can be throttled and paused.
+#+begin_example
+[pipe]-->{filter}-->[pipe]-->{filter}-->|
+#+end_example
 
-In the Kanban model, the Stager is given a master list of barcodes and the location of a Staging Bucket on startup. From this list, the Stager picks a number of barcodes (this number can be adjusted) and drops tokens for them in the Staging Bucket. These tokens are files containg the barcode and, possibly, other information (like an updated MARC record).  It then monitors the Staging Bucket; when it is empty, it selects another tranche.  When the list is empty, it stops.
+In our model, each filter is an asynchronous process, and the pipes are directories.
 
-In the message-broker model, a Queue is passed to the Stager at startup. The Stager posts message to the Queue.
+#+begin_example
+[directory]      [directory]      [directory]
+           \    /           \    /
+          process           process
+#+end_example
 
-** Downloading Process
-The Downloader downloads files with the GRIN API. On start-up, it should be given the necessary credentials, the location of a Staging Bucket, and the location of a Processing Bucket. 
 
-In the Kanban model, the Downloader polls the Staging Bucket.  When there are tokens in it, the Downloader picks one and puts a lock on it, so other Downloaders don't process it (it could simply give it a different extension, for example).  It downloads the encrypted tarball from GRIN, puts it in the Processing Bucket; it moves the locked token to the Processing Bucket as well and then unlocks it.
+** An Example
+Let us imagine a simple pipeline to download a set of book resources and decrypt them.
 
-In the message-broker model, two Queues are passed to the Downloader at startup: a Staged Queue and a To-Be-Processed Queue; the Downloader takes a message from the queue, downloads the encrypted tarball and stores it; then puts a message on the TBP Queue.
+Before the pipeline is run, a configuration file is put into a directory (Bucket 0). The configuration file includes at the very least a pointer to the list of barcodes to be processed and the storage bin into which the downloaded files should be placed, but it can also contain other runtime configurations, like credentials; the number of Downloaders to run; and so on.
 
-** [Processing Processes]
-At this point in the pipeline, operations can be performed on the book before it is uploaded to the cloud store.  At Harvard, they replace the Google's MARC record with an updated one from the Stanford POD; we might do the same.  Google's tarball contains .jp2, .txt, and .html (hocr) files; we might want to run a different OCR engine over the pages, or do some NLP analysis; Hathi does this. Or we do nothing other than move the item to a ready-to-be-uploded bucket.
+*** Init
+The first process is Init. On startup, it reads the configuration file from Bucket 0. First, it performs checks (is the barcode list properly formatted? Is the Storage Bin writable?).  Then it spawns the processes in the pipeline, assigning each an input bucket and an output bucket; it may also set other per-process configuration values as well (the Downloaders are passed the necessary credentials to access GRIN; the Decrypter is given the decryption password).  Finally, it starts the processes.
 
-** Uploading Process
-The Uploader monitors a ready-to-be-uploaded bucket for tarballs; when it finds one, it uploads the tarball a cloud server (an Uploader is configured for a particular service), and then moves the tarball to a Completed bucket.
+*** Stager
+The first process in the pipeline is a Stager. It selects the books to download from a list of barcodes, and it regulates the rate at which they are downloaded.
 
-** Cleanup Process
-This process (or processes) monitors the Completed bucket and takes some action or actions: it may write a report, or write to a log; if the bucket reaches a certain size, it empties it.
+On startup, the Stager loads all the barcodes into a Queue. Part of its configuration might include the name of a method to use to order the barcodes based on some criteria.
+
+Other configurations might include tranche or batch size (how many tokens to put into the Staging Bucket at a time) and other rate information.
+
+Then the Stager loops.
+- if the Staging Bucket is not empty; wait.
+- Otherwise, pop a tranche-sized number of barcodes off the queue.  For each, create a file in the Staging Bucket that contains the barcode number.
+
+*** Downloader
+The pipeline can be configured to run more than one Downloader in parallel.
+
+- If the input bucket (the Staging Bucket)  is empty, wait.
+- Take a token (we must come up with a way for a Downloader to signal that a token has been taken, so other Downloaders don't try to process the same token. Perhaps a process reads the file's contents into memory and then deletes it, or moves it to a trash bin).
+- Download the file from GRIN into a temporary file; when it is complete, copy it to the configured output directory.
+- Update the token with the path to the downloaded file and write it to the output bucket.
+
+
+*** Decrypter
+The pipeline can likewise be configured to run more than one Decrypter in parallel.
+
+- If the input bucket is empty, wait.
+- Take a token from the input bucket and read it.
+- Decrypt the file on the token (using gpg), writing it to a configured output directory (it might be the same directory).
+- Delete the encrypted file (configurable).
+- Update the token with the path to the decrypted file and write it to the output bucket.
+
 
