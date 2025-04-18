@@ -49,17 +49,37 @@ Harvard's =liberate= script can serve as a model for our implementation, but it 
 
 * Design 1: An Asynchronous Pipeline
 
-A better approach might be to implement the pipeline as a collection of asynchronous processes or microservices that either communicate via a messaging queue (like RabbitMQ) or through polling. Such a pipeline would be more robust (if one process fails the entire pipeline doesn't stop); faster (multiple processes running at the same time); and easier to maintain (proper separation of concerns).  Mosts importantly, it would be configurable and extensible: an OCR process, for example, could be inserted into the pipeline without modifying anything
+A better approach might be to implement the pipeline as a collection of asynchronous processes or microservices that either communicate via a messaging queue (like RabbitMQ) or through polling. Such a pipeline would be more robust (if one process fails the entire pipeline doesn't stop); faster (multiple processes running at the same time); and easier to maintain (proper separation of concerns).  Mosts importantly, it would be configurable and extensible: an OCR process, for example, could be inserted into the pipeline without modifying anything.
 
+The processes in the pipeline must communicate with one another.  Two possible ways:
 
-The components of the pipeline move tokens and assets through chains of buckets.  One chain contains the books/tarballs
+- passing tokens through a series of buckets (directories), Kanban style
+- using a message broker like RabbitMQ
 
-- Bucket#1 :: contains barcode tokens.  These might be the MARC records extracted from the Stanford POD; they might be files that processes use to record timestamps or other information. In one scenario, there is a *staging process* that selects items from the set of Princeton Google Books based on some criteria. A second process periodically checks this bucket: if there are tokens in it, the process iterates over them and tells GRIN to stage each one (if it is not already in the pool)
+We should consider both.
 
-- A *downloader process* that monitors bucket#1 for tokens. If there are tokens, it iterates over each one in bucket#1. For each token, it downloads encrypted tarball from GRIN, decrypts it, and puts the decrypted tarball into bucket#2, along with the token.  When there are no more tokens, it notifies the stager.
+There are at least three processor classes: a staging process; a downloading process, and an uploading process. A fourth process, a monitor, could be used gather performance stats.
 
-- An *uploader process* monitors bucket#2.  If there are tarballs in the bucket, the process uploads each one to the cloud store; it verifies that the tarball has been successfully uploaded and then it deletes the tarball.  It moves the tarball's token to bucket#3. When there are no more tarballs, it notifies the downloader.
+** Staging Process
+This process selects Google Book resources to work on, according to some criteria. One strategy might be to feed it a list of barcodes (slices of the _all_books.tsv file, for example).  This process can be throttled and paused.
 
+In the Kanban model, the Stager is given a master list of barcodes and the location of a Staging Bucket on startup. From this list, the Stager picks a number of barcodes (this number can be adjusted) and drops tokens for them in the Staging Bucket. These tokens are files containg the barcode and, possibly, other information (like an updated MARC record).  It then monitors the Staging Bucket; when it is empty, it selects another tranche.  When the list is empty, it stops.
 
-I suspect the most flexible way to implement inter-process communication is through a message broker like RabbitMQ.
+In the message-broker model, a Queue is passed to the Stager at startup. The Stager posts message to the Queue.
+
+** Downloading Process
+The Downloader downloads files with the GRIN API. On start-up, it should be given the necessary credentials, the location of a Staging Bucket, and the location of a Processing Bucket. 
+
+In the Kanban model, the Downloader polls the Staging Bucket.  When there are tokens in it, the Downloader picks one and puts a lock on it, so other Downloaders don't process it (it could simply give it a different extension, for example).  It downloads the encrypted tarball from GRIN, puts it in the Processing Bucket; it moves the locked token to the Processing Bucket as well and then unlocks it.
+
+In the message-broker model, two Queues are passed to the Downloader at startup: a Staged Queue and a To-Be-Processed Queue; the Downloader takes a message from the queue, downloads the encrypted tarball and stores it; then puts a message on the TBP Queue.
+
+** [Processing Processes]
+At this point in the pipeline, operations can be performed on the book before it is uploaded to the cloud store.  At Harvard, they replace the Google's MARC record with an updated one from the Stanford POD; we might do the same.  Google's tarball contains .jp2, .txt, and .html (hocr) files; we might want to run a different OCR engine over the pages, or do some NLP analysis; Hathi does this. Or we do nothing other than move the item to a ready-to-be-uploded bucket.
+
+** Uploading Process
+The Uploader monitors a ready-to-be-uploaded bucket for tarballs; when it finds one, it uploads the tarball a cloud server (an Uploader is configured for a particular service), and then moves the tarball to a Completed bucket.
+
+** Cleanup Process
+This process (or processes) monitors the Completed bucket and takes some action or actions: it may write a report, or write to a log; if the bucket reaches a certain size, it empties it.
 
