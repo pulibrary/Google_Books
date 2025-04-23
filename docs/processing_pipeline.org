@@ -1,11 +1,26 @@
+#+title: Designing a Pipeline for Copying Books from GRIN
+#+date: <2025-04-17 Thu>
+#+author: Cliff Wulfman
+#+email: cwulfman@princeton.edu
+
+PUL wants to copy all of its books digitized during the Google Books project to a server under its control.  This document proposes a method for accomplishing this goal.
+
+
 * General Considerations
 ** Scale
 GRIN says PUL has 277,970 books Google Books. Harvard says the default conversion rate (how many books GRIN can process into downloadable tarballs) is about 5,000 per day. Assuming we can download tarballs as fast as GRIN can put them up, that means a minimum of 56 days to process everything.
 
 The size of the _converted pool at Google Books is also 5,000: once the pool size reaches 5000, older packages are replaced with new ones in the pool. 
 
+* Existing Resources
+Google has written a [[https://docs.google.com/document/d/1ugKUSkq4jAwmyWu3HubUIobQA1ag4VgRP1JjLeGUW20/edit?usp=sharing][GRIN Overview]] that describes the Google Return INterface (GRIN) and sample Python code that uses OAuth2 to access the GRIN API.  Harvard's =grin-to-s3= package (below)  builds on this script.
 
-* Harvard's Pipeline
+
+** grin-to-s3
+The Institutional Data Initiative at Harvard has developed a set of Python scripts called =grin-to-s3= that they use to migrate their books.  Some of its features are local to Harvard or not relevant to us, but it provides a model, some modules, and some guidance that are useful to us.
+
+The suite includes scripts for hitting the GRIN API; matching GRIN barcodes to MARC records; moving an entire corpus from GRIN to s3 and doing things with the retrieved archives; and tools for generating data sets for machine learning tasks.
+
 Harvard implements a pipeline in a script called =liberate.py=. 
 
 It assumes you have already:
@@ -26,15 +41,72 @@ Processing does a few things:
 6. As data is collected and put into S3, a `.retrieval` sister file containing a timestamp is uploaded.
 #+end_quote
 
-* Another Approach
-Rather than have a single, long-running process to do all the work, a more asynchronous approach would almost certainly be superior. One process manages the _all_books list: what books have been copied over to our bucket, what books should be queued up next, based on the state of the _converted pool.
+Harvard's =liberate= script can serve as a model for our implementation, but it cannot be used out-of-the box, for several reasons:
 
-Another process monitors the queue of books to be processed
+- it includes functionality we don't want;
+- it bundles functionality into a single script: the pipeline is contained within the script, making the pipeline single-threaded, resulting in a slower, more fragile process.
 
 
-** Tell Google to make a barcode ready for download
-Use Harvard's grin.py script to do this:
+* Design 1: An Asynchronous Kanban-Style Pipeline
 
-#+begin_src sh
-  $ python grin.py --directory=PRNC --method=POST --resource="_process?barcodes=123&barcodes=456&barcodes=789"
-#+end_src
+A better approach might be to implement the pipeline as a collection of asynchronous processes or microservices that either communicate via a messaging queue (like RabbitMQ) or through polling. Such a pipeline would be more robust (if one process fails the entire pipeline doesn't stop); faster (multiple processes running at the same time); and easier to maintain (proper separation of concerns).  Mosts importantly, it would be configurable and extensible: an OCR process, for example, could be inserted into the pipeline without modifying anything.
+
+The message-broker method is more complex, perhaps overly so for this application; for now, we will consider the polling model.
+
+In this model, the pipeline is a sequence of directories containing tokens, like a Kanban board, that serve as buckets.  Processes are configured to monitor the state of an "input bucket": when a token appears there, a process performs its actions and then moves the token to an "output bucket," which serves as the input bucket for another process.
+
+Tokens are files containing state information. Processes move tokens into an process-specific working directory while they perform their tasks; when they are done, they move the token to the next bucket in the queue, after, perhaps, update the token with new information.
+
+The prototypical pipline is a sequence of linked processes (filters), where the output of one filter is the input to another filter:
+
+#+begin_example
+[pipe]-->{filter}-->[pipe]-->{filter}-->|
+#+end_example
+
+In our model, each filter is an asynchronous process, and the pipes are directories.
+
+#+begin_example
+[directory]      [directory]      [directory]
+           \    /           \    /
+          process           process
+#+end_example
+
+
+** An Example
+Let us imagine a simple pipeline to download a set of book resources and decrypt them.
+
+Before the pipeline is run, a configuration file is put into a directory (Bucket 0). The configuration file includes at the very least a pointer to the list of barcodes to be processed and the storage bin into which the downloaded files should be placed, but it can also contain other runtime configurations, like credentials; the number of Downloaders to run; and so on.
+
+*** Init
+The first process is Init. On startup, it reads the configuration file from Bucket 0. First, it performs checks (is the barcode list properly formatted? Is the Storage Bin writable?).  Then it spawns the processes in the pipeline, assigning each an input bucket and an output bucket; it may also set other per-process configuration values as well (the Downloaders are passed the necessary credentials to access GRIN; the Decrypter is given the decryption password).  Finally, it starts the processes.
+
+*** Stager
+The first process in the pipeline is a Stager. It selects the books to download from a list of barcodes, and it regulates the rate at which they are downloaded.
+
+On startup, the Stager loads all the barcodes into a Queue. Part of its configuration might include the name of a method to use to order the barcodes based on some criteria.
+
+Other configurations might include tranche or batch size (how many tokens to put into the Staging Bucket at a time) and other rate information.
+
+Then the Stager loops.
+- if the Staging Bucket is not empty; wait.
+- Otherwise, pop a tranche-sized number of barcodes off the queue.  For each, create a file in the Staging Bucket that contains the barcode number.
+
+*** Downloader
+The pipeline can be configured to run more than one Downloader in parallel.
+
+- If the input bucket (the Staging Bucket)  is empty, wait.
+- Take a token (we must come up with a way for a Downloader to signal that a token has been taken, so other Downloaders don't try to process the same token. Perhaps a process reads the file's contents into memory and then deletes it, or moves it to a trash bin).
+- Download the file from GRIN into a temporary file; when it is complete, copy it to the configured output directory.
+- Update the token with the path to the downloaded file and write it to the output bucket.
+
+
+*** Decrypter
+The pipeline can likewise be configured to run more than one Decrypter in parallel.
+
+- If the input bucket is empty, wait.
+- Take a token from the input bucket and read it.
+- Decrypt the file on the token (using gpg), writing it to a configured output directory (it might be the same directory).
+- Delete the encrypted file (configurable).
+- Update the token with the path to the decrypted file and write it to the output bucket.
+
+
