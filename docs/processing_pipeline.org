@@ -13,7 +13,7 @@ GRIN says PUL has 277,970 books Google Books. Harvard says the default conversio
 The size of the _converted pool at Google Books is also 5,000: once the pool size reaches 5000, older packages are replaced with new ones in the pool. 
 
 * Existing Resources
-Google has written a [[https://docs.google.com/document/d/1ugKUSkq4jAwmyWu3HubUIobQA1ag4VgRP1JjLeGUW20/edit?usp=sharing][GRIN Overview]] that describes the Google Return INterface (GRIN) and sample Python code that uses OAuth2 to access the GRIN API.  Harvard's =grin-to-s3= package (below)  builds on this script.
+Google has written a [[https://docs.google.com/document/d/1ugKUSkq4jAwmyWu3HubUIobQA1ag4VgRP1JjLeGUW20/edit?usp=sharing][GRIN Overview]] that describes the Google Return INterface (GRIN) and sample Python code that uses OAuth2 to access the GRIN API.  Harvard's =grin-to-s3= package (below) builds on this script.
 
 
 ** grin-to-s3
